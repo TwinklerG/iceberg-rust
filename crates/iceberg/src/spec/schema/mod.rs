@@ -21,6 +21,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
+/// Defines schema in iceberg, which is a collection of nested fields. Each field has a unique field id, a name, a type, and other properties. The schema also has a schema id and a set of identifier field ids. The schema provides methods for retrieving fields by id or name, and for validating identifier fields.
+pub mod update;
 mod utils;
 mod visitor;
 pub use self::visitor::*;
