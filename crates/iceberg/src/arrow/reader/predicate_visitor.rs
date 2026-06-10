@@ -37,7 +37,7 @@ use parquet::schema::types::SchemaDescriptor;
 use crate::arrow::get_arrow_datum;
 use crate::error::Result;
 use crate::expr::visitors::bound_predicate_visitor::BoundPredicateVisitor;
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::{BoundPredicate, BoundReference, BoundTerm};
 use crate::spec::Datum;
 use crate::{Error, ErrorKind};
 
@@ -75,123 +75,123 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         Ok(())
     }
 
-    fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+    fn is_null(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> Result<()> {
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
-    fn not_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+    fn not_null(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> Result<()> {
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
-    fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+    fn is_nan(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> Result<()> {
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
-    fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+    fn not_nan(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> Result<()> {
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
     fn not_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 
     fn not_in(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<()> {
-        self.field_ids.insert(reference.field().id);
+        self.field_ids.insert(term.field().id);
         Ok(())
     }
 }
@@ -211,15 +211,15 @@ impl PredicateConverter<'_> {
     /// required column indices which is used to project the column in the record batch.
     /// Return None if the field id is not found in the column map, which is possible
     /// due to schema evolution.
-    fn bound_reference(&mut self, reference: &BoundReference) -> Result<Option<usize>> {
+    fn bound_reference(&mut self, term: &BoundReference) -> Result<Option<usize>> {
         // The leaf column's index in Parquet schema.
-        if let Some(column_idx) = self.column_map.get(&reference.field().id) {
+        if let Some(column_idx) = self.column_map.get(&term.field().id) {
             if self.parquet_schema.get_column_root(*column_idx).is_group() {
                 return Err(Error::new(
                     ErrorKind::DataInvalid,
                     format!(
                         "Leaf column `{}` in predicates isn't a root column in Parquet schema.",
-                        reference.field().name
+                        term.field().name
                     ),
                 ));
             }
@@ -233,7 +233,7 @@ impl PredicateConverter<'_> {
                     ErrorKind::DataInvalid,
                     format!(
                 "Leaf column `{}` in predicates cannot be found in the required column indices.",
-                reference.field().name
+                term.field().name
             ),
                 ))?;
 
@@ -350,10 +350,10 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn is_null(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             Ok(Box::new(move |batch| {
                 let column = project_column(&batch, idx)?;
                 is_null(&column)
@@ -366,10 +366,10 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn not_null(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             Ok(Box::new(move |batch| {
                 let column = project_column(&batch, idx)?;
                 is_not_null(&column)
@@ -382,10 +382,10 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn is_nan(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             Ok(Box::new(move |batch| {
                 let column = project_column(&batch, idx)?;
                 compute_is_nan(&column)
@@ -398,10 +398,10 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn not_nan(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             Ok(Box::new(move |batch| {
                 let column = project_column(&batch, idx)?;
                 let is_nan = compute_is_nan(&column)?;
@@ -415,11 +415,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
@@ -435,11 +435,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
@@ -455,11 +455,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
@@ -475,11 +475,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
@@ -495,11 +495,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
@@ -515,11 +515,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn not_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
@@ -535,11 +535,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
@@ -555,11 +555,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
@@ -576,11 +576,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             let literals: Vec<_> = literals
                 .iter()
                 .map(|lit| get_arrow_datum(lit).unwrap())
@@ -606,11 +606,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
     fn not_in(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
+        if let Some(idx) = self.bound_reference(term.reference())? {
             let literals: Vec<_> = literals
                 .iter()
                 .map(|lit| get_arrow_datum(lit).unwrap())

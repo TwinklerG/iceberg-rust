@@ -26,15 +26,104 @@ use crate::expr::accessor::{StructAccessor, StructAccessorRef};
 use crate::expr::{
     BinaryExpression, Bind, Predicate, PredicateOperator, SetExpression, UnaryExpression,
 };
-use crate::spec::{Datum, NestedField, NestedFieldRef, SchemaRef};
+use crate::spec::{Datum, NestedField, NestedFieldRef, SchemaRef, Transform};
 use crate::{Error, ErrorKind};
 
 /// Unbound term before binding to a schema.
-pub type Term = Reference;
+/// Either a bare column reference or a transform applied to a reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Term {
+    /// A bare column reference, e.g., `a` in `a > 10`.
+    Reference(Reference),
+    /// A transform applied to a reference, e.g., `bucket(10, col_a)`.
+    Transform(TransformTerm),
+}
+
+impl From<Reference> for Term {
+    fn from(r: Reference) -> Self {
+        Term::Reference(r)
+    }
+}
+
+impl From<TransformTerm> for Term {
+    fn from(t: TransformTerm) -> Self {
+        Term::Transform(t)
+    }
+}
+
+impl Display for Term {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Term::Reference(r) => write!(f, "{}", r),
+            Term::Transform(t) => write!(f, "{}", t),
+        }
+    }
+}
+
+impl Bind for Term {
+    type Bound = BoundTerm;
+
+    fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound> {
+        match self {
+            Term::Reference(r) => Ok(r.bind(schema, case_sensitive)?.into()),
+            Term::Transform(t) => Ok(t.bind(schema, case_sensitive)?.into()),
+        }
+    }
+}
+
+/// Bound term after binding to a schema.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BoundTerm {
+    /// A bound column reference.
+    Reference(BoundReference),
+    /// A bound transform term.
+    Transform(BoundTransformTerm),
+}
+
+impl BoundTerm {
+    /// Returns the underlying [`BoundReference`] regardless of variant.
+    pub fn reference(&self) -> &BoundReference {
+        match self {
+            BoundTerm::Reference(r) => r,
+            BoundTerm::Transform(t) => t.reference(),
+        }
+    }
+
+    /// Returns the underlying [`NestedField`] of the reference regardless of variant.
+    pub fn field(&self) -> &NestedField {
+        self.reference().field()
+    }
+
+    /// Returns the underlying [`StructAccessor`] of the reference regardless of variant.
+    pub fn accessor(&self) -> &StructAccessor {
+        self.reference().accessor()
+    }
+}
+
+impl From<BoundReference> for BoundTerm {
+    fn from(r: BoundReference) -> Self {
+        BoundTerm::Reference(r)
+    }
+}
+
+impl From<BoundTransformTerm> for BoundTerm {
+    fn from(t: BoundTransformTerm) -> Self {
+        BoundTerm::Transform(t)
+    }
+}
+
+impl Display for BoundTerm {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BoundTerm::Reference(r) => write!(f, "{}", r),
+            BoundTerm::Transform(t) => write!(f, "{}", t),
+        }
+    }
+}
 
 /// A named reference in an unbound expression.
 /// For example, `a` in `a > 10`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reference {
     name: String,
 }
@@ -66,7 +155,7 @@ impl Reference {
     pub fn less_than(self, datum: Datum) -> Predicate {
         Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThan,
-            self,
+            self.into(),
             datum,
         ))
     }
@@ -85,7 +174,7 @@ impl Reference {
     pub fn less_than_or_equal_to(self, datum: Datum) -> Predicate {
         Predicate::Binary(BinaryExpression::new(
             PredicateOperator::LessThanOrEq,
-            self,
+            self.into(),
             datum,
         ))
     }
@@ -104,7 +193,7 @@ impl Reference {
     pub fn greater_than(self, datum: Datum) -> Predicate {
         Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThan,
-            self,
+            self.into(),
             datum,
         ))
     }
@@ -123,7 +212,7 @@ impl Reference {
     pub fn greater_than_or_equal_to(self, datum: Datum) -> Predicate {
         Predicate::Binary(BinaryExpression::new(
             PredicateOperator::GreaterThanOrEq,
-            self,
+            self.into(),
             datum,
         ))
     }
@@ -140,7 +229,11 @@ impl Reference {
     /// assert_eq!(&format!("{expr}"), "a = 10");
     /// ```
     pub fn equal_to(self, datum: Datum) -> Predicate {
-        Predicate::Binary(BinaryExpression::new(PredicateOperator::Eq, self, datum))
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::Eq,
+            self.into(),
+            datum,
+        ))
     }
 
     /// Creates a not equal-to expression. For example, `a!= 10`.
@@ -155,7 +248,11 @@ impl Reference {
     /// assert_eq!(&format!("{expr}"), "a != 10");
     /// ```
     pub fn not_equal_to(self, datum: Datum) -> Predicate {
-        Predicate::Binary(BinaryExpression::new(PredicateOperator::NotEq, self, datum))
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::NotEq,
+            self.into(),
+            datum,
+        ))
     }
 
     /// Creates a start-with expression. For example, `a STARTS WITH "foo"`.
@@ -172,7 +269,7 @@ impl Reference {
     pub fn starts_with(self, datum: Datum) -> Predicate {
         Predicate::Binary(BinaryExpression::new(
             PredicateOperator::StartsWith,
-            self,
+            self.into(),
             datum,
         ))
     }
@@ -192,7 +289,7 @@ impl Reference {
     pub fn not_starts_with(self, datum: Datum) -> Predicate {
         Predicate::Binary(BinaryExpression::new(
             PredicateOperator::NotStartsWith,
-            self,
+            self.into(),
             datum,
         ))
     }
@@ -209,7 +306,7 @@ impl Reference {
     /// assert_eq!(&format!("{expr}"), "a IS NAN");
     /// ```
     pub fn is_nan(self) -> Predicate {
-        Predicate::Unary(UnaryExpression::new(PredicateOperator::IsNan, self))
+        Predicate::Unary(UnaryExpression::new(PredicateOperator::IsNan, self.into()))
     }
 
     /// Creates an is-not-nan expression. For example, `a IS NOT NAN`.
@@ -224,7 +321,7 @@ impl Reference {
     /// assert_eq!(&format!("{expr}"), "a IS NOT NAN");
     /// ```
     pub fn is_not_nan(self) -> Predicate {
-        Predicate::Unary(UnaryExpression::new(PredicateOperator::NotNan, self))
+        Predicate::Unary(UnaryExpression::new(PredicateOperator::NotNan, self.into()))
     }
 
     /// Creates an is-null expression. For example, `a IS NULL`.
@@ -239,7 +336,7 @@ impl Reference {
     /// assert_eq!(&format!("{expr}"), "a IS NULL");
     /// ```
     pub fn is_null(self) -> Predicate {
-        Predicate::Unary(UnaryExpression::new(PredicateOperator::IsNull, self))
+        Predicate::Unary(UnaryExpression::new(PredicateOperator::IsNull, self.into()))
     }
 
     /// Creates an is-not-null expression. For example, `a IS NOT NULL`.
@@ -254,7 +351,10 @@ impl Reference {
     /// assert_eq!(&format!("{expr}"), "a IS NOT NULL");
     /// ```
     pub fn is_not_null(self) -> Predicate {
-        Predicate::Unary(UnaryExpression::new(PredicateOperator::NotNull, self))
+        Predicate::Unary(UnaryExpression::new(
+            PredicateOperator::NotNull,
+            self.into(),
+        ))
     }
 
     /// Creates an is-in expression. For example, `a IN (5, 6)`.
@@ -273,7 +373,7 @@ impl Reference {
     pub fn is_in(self, literals: impl IntoIterator<Item = Datum>) -> Predicate {
         Predicate::Set(SetExpression::new(
             PredicateOperator::In,
-            self,
+            self.into(),
             FnvHashSet::from_iter(literals),
         ))
     }
@@ -294,7 +394,7 @@ impl Reference {
     pub fn is_not_in(self, literals: impl IntoIterator<Item = Datum>) -> Predicate {
         Predicate::Set(SetExpression::new(
             PredicateOperator::NotIn,
-            self,
+            self.into(),
             FnvHashSet::from_iter(literals),
         ))
     }
@@ -380,15 +480,217 @@ impl Display for BoundReference {
 }
 
 /// Bound term after binding to a schema.
-pub type BoundTerm = BoundReference;
+/// For example, `bucket(10, col_a)` in `bucket(10, col_a) = 3`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransformTerm {
+    transform: Transform,
+    reference: Reference,
+}
+
+impl TransformTerm {
+    /// Create a new transform term.
+    pub fn new(transform: Transform, reference: Reference) -> Self {
+        Self {
+            transform,
+            reference,
+        }
+    }
+
+    /// Create a bucket transform term. For example, `bucket(10, col_a)`.
+    pub fn bucket(name: impl Into<String>, n: u32) -> Self {
+        Self::new(Transform::Bucket(n), Reference::new(name))
+    }
+
+    /// Create a truncate transform term. For example, `truncate(4, name)`.
+    pub fn truncate(name: impl Into<String>, width: u32) -> Self {
+        Self::new(Transform::Truncate(width), Reference::new(name))
+    }
+
+    /// Create a year transform term. For example, `year(ts)`.
+    pub fn year(name: impl Into<String>) -> Self {
+        Self::new(Transform::Year, Reference::new(name))
+    }
+
+    /// Create a month transform term. For example, `month(ts)`.
+    pub fn month(name: impl Into<String>) -> Self {
+        Self::new(Transform::Month, Reference::new(name))
+    }
+
+    /// Create a day transform term. For example, `day(ts)`.
+    pub fn day(name: impl Into<String>) -> Self {
+        Self::new(Transform::Day, Reference::new(name))
+    }
+
+    /// Create an hour transform term. For example, `hour(ts)`.
+    pub fn hour(name: impl Into<String>) -> Self {
+        Self::new(Transform::Hour, Reference::new(name))
+    }
+
+    /// Returns the transform of this term.
+    pub fn transform(&self) -> &Transform {
+        &self.transform
+    }
+
+    /// Returns the reference of this term.
+    pub fn reference(&self) -> &Reference {
+        &self.reference
+    }
+}
+
+impl TransformTerm {
+    /// Creates an equal-to expression. For example, `bucket(10, col_a) = 3`.
+    pub fn equal_to(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::Eq,
+            Term::Transform(self),
+            datum,
+        ))
+    }
+
+    /// Creates a not-equal-to expression.
+    pub fn not_equal_to(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::NotEq,
+            Term::Transform(self),
+            datum,
+        ))
+    }
+
+    /// Creates a less-than expression.
+    pub fn less_than(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::LessThan,
+            Term::Transform(self),
+            datum,
+        ))
+    }
+
+    /// Creates a less-than-or-equal-to expression.
+    pub fn less_than_or_equal_to(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::LessThanOrEq,
+            Term::Transform(self),
+            datum,
+        ))
+    }
+
+    /// Creates a greater-than expression.
+    pub fn greater_than(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::GreaterThan,
+            Term::Transform(self),
+            datum,
+        ))
+    }
+
+    /// Creates a greater-than-or-equal-to expression.
+    pub fn greater_than_or_equal_to(self, datum: Datum) -> Predicate {
+        Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::GreaterThanOrEq,
+            Term::Transform(self),
+            datum,
+        ))
+    }
+
+    /// Creates an is-in expression.
+    pub fn is_in(self, literals: impl IntoIterator<Item = Datum>) -> Predicate {
+        Predicate::Set(SetExpression::new(
+            PredicateOperator::In,
+            Term::Transform(self),
+            FnvHashSet::from_iter(literals),
+        ))
+    }
+
+    /// Creates a not-in expression.
+    pub fn is_not_in(self, literals: impl IntoIterator<Item = Datum>) -> Predicate {
+        Predicate::Set(SetExpression::new(
+            PredicateOperator::NotIn,
+            Term::Transform(self),
+            FnvHashSet::from_iter(literals),
+        ))
+    }
+}
+
+impl Display for TransformTerm {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}(ref(name=\"{}\"))",
+            self.transform, self.reference.name
+        )
+    }
+}
+
+impl Bind for TransformTerm {
+    type Bound = BoundTransformTerm;
+
+    fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> crate::Result<Self::Bound> {
+        let bound_ref = self.reference.bind(schema, case_sensitive)?;
+        // Validate the transform is compatible with the field type
+        self.transform
+            .result_type(bound_ref.field().field_type.as_ref())
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "Transform {} is not compatible with field type {}: {}",
+                        self.transform,
+                        bound_ref.field().field_type,
+                        e
+                    ),
+                )
+            })?;
+        Ok(BoundTransformTerm::new(self.transform, bound_ref))
+    }
+}
+
+/// A bound term consisting of a transform applied to a bound reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundTransformTerm {
+    transform: Transform,
+    reference: BoundReference,
+}
+
+impl BoundTransformTerm {
+    /// Creates a new bound transform term.
+    pub fn new(transform: Transform, reference: BoundReference) -> Self {
+        Self {
+            transform,
+            reference,
+        }
+    }
+
+    /// Returns the transform of this term.
+    pub fn transform(&self) -> &Transform {
+        &self.transform
+    }
+
+    /// Returns the bound reference of this term.
+    pub fn reference(&self) -> &BoundReference {
+        &self.reference
+    }
+}
+
+impl Display for BoundTransformTerm {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}(ref(id={}, accessor-type={}))",
+            self.transform,
+            self.reference.field().id,
+            self.reference.accessor().r#type()
+        )
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use super::{BoundTerm, TransformTerm};
     use crate::expr::accessor::StructAccessor;
     use crate::expr::{Bind, BoundReference, Reference};
-    use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Transform, Type};
 
     fn table_schema_simple() -> SchemaRef {
         Arc::new(
@@ -448,5 +750,75 @@ mod tests {
         let schema = table_schema_simple();
         let result = Reference::new("bar_non_exist").bind(schema, false);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bind_transform_term() {
+        let schema = table_schema_simple();
+        let term = TransformTerm::bucket("bar", 10);
+        let bound = term.bind(schema, true).unwrap();
+
+        assert_eq!(bound.transform(), &Transform::Bucket(10));
+        assert_eq!(bound.reference().field().id, 2);
+        assert_eq!(bound.reference().field().name, "bar");
+    }
+
+    #[test]
+    fn test_bind_transform_term_incompatible_type() {
+        let schema = table_schema_simple();
+        // Year transform is not compatible with Boolean type
+        let term = TransformTerm::year("baz");
+        let result = term.bind(schema, true);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bind_transform_term_field_not_found() {
+        let schema = table_schema_simple();
+        let term = TransformTerm::bucket("nonexistent", 10);
+        let result = term.bind(schema, true);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bound_term_from_reference() {
+        let schema = table_schema_simple();
+        let bound_ref = Reference::new("bar").bind(schema, true).unwrap();
+        let bound_term: BoundTerm = bound_ref.clone().into();
+
+        assert_eq!(bound_term.field().id, 2);
+        assert_eq!(bound_term.reference(), &bound_ref);
+    }
+
+    #[test]
+    fn test_bound_term_from_transform() {
+        let schema = table_schema_simple();
+        let bound_transform = TransformTerm::bucket("bar", 10).bind(schema, true).unwrap();
+        let bound_term: BoundTerm = bound_transform.clone().into();
+
+        assert_eq!(bound_term.field().id, 2);
+        assert_eq!(bound_term.reference(), bound_transform.reference());
+    }
+
+    #[test]
+    fn test_transform_term_predicate_builders() {
+        let term = TransformTerm::bucket("a", 10);
+        let pred = term.equal_to(Datum::int(3));
+        assert_eq!(format!("{pred}"), "bucket[10](ref(name=\"a\")) = 3");
+
+        let term = TransformTerm::truncate("a", 4);
+        let pred = term.less_than(Datum::int(100));
+        assert_eq!(format!("{pred}"), "truncate[4](ref(name=\"a\")) < 100");
+    }
+
+    #[test]
+    fn test_transform_term_display() {
+        let term = TransformTerm::bucket("col_a", 10);
+        assert_eq!(format!("{term}"), "bucket[10](ref(name=\"col_a\"))");
+
+        let term = TransformTerm::year("ts");
+        assert_eq!(format!("{term}"), "year(ref(name=\"ts\"))");
     }
 }

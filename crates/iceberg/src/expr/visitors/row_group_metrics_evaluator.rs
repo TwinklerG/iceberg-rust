@@ -25,7 +25,7 @@ use parquet::file::statistics::Statistics;
 
 use crate::arrow::{get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum};
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::{BoundPredicate, BoundTerm};
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
 
@@ -153,12 +153,12 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
 
     fn visit_inequality(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         cmp_fn: fn(&Datum, &Datum) -> bool,
         use_lower_bound: bool,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         if self.contains_nulls_only(field_id) {
             return ROW_GROUP_CANT_MATCH;
@@ -211,8 +211,8 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         Ok(!inner)
     }
 
-    fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        let field_id = reference.field().id;
+    fn is_null(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
+        let field_id = term.field().id;
 
         match self.null_count(field_id) {
             Some(0) => ROW_GROUP_CANT_MATCH,
@@ -221,12 +221,8 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         }
     }
 
-    fn not_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<bool> {
-        let field_id = reference.field().id;
+    fn not_null(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
+        let field_id = term.field().id;
 
         if self.contains_nulls_only(field_id) {
             return ROW_GROUP_CANT_MATCH;
@@ -235,63 +231,54 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         ROW_GROUP_MIGHT_MATCH
     }
 
-    fn is_nan(&mut self, _reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
+    fn is_nan(&mut self, _term: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         // NaN counts not in ColumnChunkMetadata Statistics
         ROW_GROUP_MIGHT_MATCH
     }
 
-    fn not_nan(
-        &mut self,
-        _reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<bool> {
+    fn not_nan(&mut self, _term: &BoundTerm, _predicate: &BoundPredicate) -> Result<bool> {
         // NaN counts not in ColumnChunkMetadata Statistics
         ROW_GROUP_MIGHT_MATCH
     }
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        self.visit_inequality(reference, datum, PartialOrd::lt, true)
+        self.visit_inequality(term, datum, PartialOrd::lt, true)
     }
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        self.visit_inequality(reference, datum, PartialOrd::le, true)
+        self.visit_inequality(term, datum, PartialOrd::le, true)
     }
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        self.visit_inequality(reference, datum, PartialOrd::gt, false)
+        self.visit_inequality(term, datum, PartialOrd::gt, false)
     }
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        self.visit_inequality(reference, datum, PartialOrd::ge, false)
+        self.visit_inequality(term, datum, PartialOrd::ge, false)
     }
 
-    fn eq(
-        &mut self,
-        reference: &BoundReference,
-        datum: &Datum,
-        _predicate: &BoundPredicate,
-    ) -> Result<bool> {
-        let field_id = reference.field().id;
+    fn eq(&mut self, term: &BoundTerm, datum: &Datum, _predicate: &BoundPredicate) -> Result<bool> {
+        let field_id = term.field().id;
 
         if self.contains_nulls_only(field_id) {
             return ROW_GROUP_CANT_MATCH;
@@ -322,7 +309,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn not_eq(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
@@ -334,11 +321,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         if self.contains_nulls_only(field_id) {
             return ROW_GROUP_CANT_MATCH;
@@ -392,11 +379,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         if self.may_contain_null(field_id) {
             return ROW_GROUP_MIGHT_MATCH;
@@ -461,11 +448,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         if self.contains_nulls_only(field_id) {
             return ROW_GROUP_CANT_MATCH;
@@ -505,7 +492,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn not_in(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {

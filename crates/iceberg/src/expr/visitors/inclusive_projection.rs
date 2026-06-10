@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use fnv::FnvHashSet;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference, Predicate};
+use crate::expr::{BoundPredicate, BoundTerm, Predicate};
 use crate::spec::{Datum, PartitionField, PartitionSpecRef};
 use crate::{Error, ErrorKind};
 
@@ -58,10 +58,10 @@ impl InclusiveProjection {
 
     fn get_parts(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         predicate: &BoundPredicate,
     ) -> Result<Predicate, Error> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         // This could be made a bit neater if `try_reduce` ever becomes stable
         self.get_parts_for_field_id(field_id)
@@ -108,126 +108,110 @@ impl BoundPredicateVisitor for InclusiveProjection {
         ))
     }
 
-    fn is_null(
-        &mut self,
-        reference: &BoundReference,
-        predicate: &BoundPredicate,
-    ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+    fn is_null(&mut self, term: &BoundTerm, predicate: &BoundPredicate) -> crate::Result<Self::T> {
+        self.get_parts(term, predicate)
     }
 
-    fn not_null(
-        &mut self,
-        reference: &BoundReference,
-        predicate: &BoundPredicate,
-    ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+    fn not_null(&mut self, term: &BoundTerm, predicate: &BoundPredicate) -> crate::Result<Self::T> {
+        self.get_parts(term, predicate)
     }
 
-    fn is_nan(
-        &mut self,
-        reference: &BoundReference,
-        predicate: &BoundPredicate,
-    ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+    fn is_nan(&mut self, term: &BoundTerm, predicate: &BoundPredicate) -> crate::Result<Self::T> {
+        self.get_parts(term, predicate)
     }
 
-    fn not_nan(
-        &mut self,
-        reference: &BoundReference,
-        predicate: &BoundPredicate,
-    ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+    fn not_nan(&mut self, term: &BoundTerm, predicate: &BoundPredicate) -> crate::Result<Self::T> {
+        self.get_parts(term, predicate)
     }
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+        self.get_parts(term, predicate)
     }
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+        self.get_parts(term, predicate)
     }
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+        self.get_parts(term, predicate)
     }
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+        self.get_parts(term, predicate)
     }
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+        self.get_parts(term, predicate)
     }
 
     fn not_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+        self.get_parts(term, predicate)
     }
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+        self.get_parts(term, predicate)
     }
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+        self.get_parts(term, predicate)
     }
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+        self.get_parts(term, predicate)
     }
 
     fn not_in(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         predicate: &BoundPredicate,
     ) -> crate::Result<Self::T> {
-        self.get_parts(reference, predicate)
+        self.get_parts(term, predicate)
     }
 }
 

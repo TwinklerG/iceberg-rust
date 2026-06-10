@@ -27,7 +27,7 @@ use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::{BoundPredicate, BoundTerm};
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
 
@@ -381,12 +381,12 @@ impl<'a> PageIndexEvaluator<'a> {
 
     fn visit_inequality(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         cmp_fn: fn(&Datum, &Datum) -> bool,
         use_lower_bound: bool,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         self.calc_row_selection(
             field_id,
@@ -443,12 +443,8 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
         ))
     }
 
-    fn is_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+    fn is_null(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> Result<RowSelection> {
+        let field_id = term.field().id;
 
         self.calc_row_selection(
             field_id,
@@ -457,12 +453,8 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
         )
     }
 
-    fn not_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+    fn not_null(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> Result<RowSelection> {
+        let field_id = term.field().id;
 
         self.calc_row_selection(
             field_id,
@@ -471,72 +463,64 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
         )
     }
 
-    fn is_nan(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<RowSelection> {
+    fn is_nan(&mut self, term: &BoundTerm, _predicate: &BoundPredicate) -> Result<RowSelection> {
         // NaN counts not present in ColumnChunkMetadata Statistics.
         // Only float columns can be NaN.
-        if reference.field().field_type.is_floating_type() {
+        if term.field().field_type.is_floating_type() {
             self.select_all_rows()
         } else {
             self.skip_all_rows()
         }
     }
 
-    fn not_nan(
-        &mut self,
-        _reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> Result<RowSelection> {
+    fn not_nan(&mut self, _term: &BoundTerm, _predicate: &BoundPredicate) -> Result<RowSelection> {
         // NaN counts not present in ColumnChunkMetadata Statistics
         self.select_all_rows()
     }
 
     fn less_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        self.visit_inequality(reference, datum, PartialOrd::lt, true)
+        self.visit_inequality(term, datum, PartialOrd::lt, true)
     }
 
     fn less_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        self.visit_inequality(reference, datum, PartialOrd::le, true)
+        self.visit_inequality(term, datum, PartialOrd::le, true)
     }
 
     fn greater_than(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        self.visit_inequality(reference, datum, PartialOrd::gt, false)
+        self.visit_inequality(term, datum, PartialOrd::gt, false)
     }
 
     fn greater_than_or_eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        self.visit_inequality(reference, datum, PartialOrd::ge, false)
+        self.visit_inequality(term, datum, PartialOrd::ge, false)
     }
 
     fn eq(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         self.calc_row_selection(
             field_id,
@@ -565,7 +549,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn not_eq(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
@@ -577,11 +561,11 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         let PrimitiveLiteral::String(datum) = datum.literal() else {
             return Err(Error::new(
@@ -643,11 +627,11 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn not_starts_with(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         datum: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         // notStartsWith will match unless all values must start with the prefix.
         // This happens when the lower and upper bounds both start with the prefix.
@@ -718,11 +702,11 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn r#in(
         &mut self,
-        reference: &BoundReference,
+        term: &BoundTerm,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {
-        let field_id = reference.field().id;
+        let field_id = term.field().id;
 
         if literals.len() > IN_PREDICATE_LIMIT {
             // skip evaluating the predicate if the number of values is too big
@@ -769,7 +753,7 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
 
     fn not_in(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<RowSelection> {

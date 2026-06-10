@@ -20,7 +20,7 @@ use fnv::FnvHashSet;
 use crate::Result;
 use crate::expr::visitors::bound_predicate_visitor::BoundPredicateVisitor;
 use crate::expr::visitors::predicate_visitor::PredicateVisitor;
-use crate::expr::{BoundPredicate, BoundReference, Predicate, Reference};
+use crate::expr::{BoundPredicate, BoundTerm, Predicate, Term};
 use crate::spec::Datum;
 
 /// A visitor that rewrites predicates by removing `NOT` predicates and
@@ -61,25 +61,25 @@ impl PredicateVisitor for RewriteNotVisitor {
         Ok(inner.negate())
     }
 
-    fn is_null(&mut self, _reference: &Reference, predicate: &Predicate) -> Result<Self::T> {
+    fn is_null(&mut self, _term: &Term, predicate: &Predicate) -> Result<Self::T> {
         Ok(predicate.clone())
     }
 
-    fn not_null(&mut self, _reference: &Reference, predicate: &Predicate) -> Result<Self::T> {
+    fn not_null(&mut self, _term: &Term, predicate: &Predicate) -> Result<Self::T> {
         Ok(predicate.clone())
     }
 
-    fn is_nan(&mut self, _reference: &Reference, predicate: &Predicate) -> Result<Self::T> {
+    fn is_nan(&mut self, _term: &Term, predicate: &Predicate) -> Result<Self::T> {
         Ok(predicate.clone())
     }
 
-    fn not_nan(&mut self, _reference: &Reference, predicate: &Predicate) -> Result<Self::T> {
+    fn not_nan(&mut self, _term: &Term, predicate: &Predicate) -> Result<Self::T> {
         Ok(predicate.clone())
     }
 
     fn less_than(
         &mut self,
-        _reference: &Reference,
+        _term: &Term,
         _literal: &Datum,
         predicate: &Predicate,
     ) -> Result<Self::T> {
@@ -88,7 +88,7 @@ impl PredicateVisitor for RewriteNotVisitor {
 
     fn less_than_or_eq(
         &mut self,
-        _reference: &Reference,
+        _term: &Term,
         _literal: &Datum,
         predicate: &Predicate,
     ) -> Result<Self::T> {
@@ -97,7 +97,7 @@ impl PredicateVisitor for RewriteNotVisitor {
 
     fn greater_than(
         &mut self,
-        _reference: &Reference,
+        _term: &Term,
         _literal: &Datum,
         predicate: &Predicate,
     ) -> Result<Self::T> {
@@ -106,34 +106,24 @@ impl PredicateVisitor for RewriteNotVisitor {
 
     fn greater_than_or_eq(
         &mut self,
-        _reference: &Reference,
+        _term: &Term,
         _literal: &Datum,
         predicate: &Predicate,
     ) -> Result<Self::T> {
         Ok(predicate.clone())
     }
 
-    fn eq(
-        &mut self,
-        _reference: &Reference,
-        _literal: &Datum,
-        predicate: &Predicate,
-    ) -> Result<Self::T> {
+    fn eq(&mut self, _term: &Term, _literal: &Datum, predicate: &Predicate) -> Result<Self::T> {
         Ok(predicate.clone())
     }
 
-    fn not_eq(
-        &mut self,
-        _reference: &Reference,
-        _literal: &Datum,
-        predicate: &Predicate,
-    ) -> Result<Self::T> {
+    fn not_eq(&mut self, _term: &Term, _literal: &Datum, predicate: &Predicate) -> Result<Self::T> {
         Ok(predicate.clone())
     }
 
     fn starts_with(
         &mut self,
-        _reference: &Reference,
+        _term: &Term,
         _literal: &Datum,
         predicate: &Predicate,
     ) -> Result<Self::T> {
@@ -142,7 +132,7 @@ impl PredicateVisitor for RewriteNotVisitor {
 
     fn not_starts_with(
         &mut self,
-        _reference: &Reference,
+        _term: &Term,
         _literal: &Datum,
         predicate: &Predicate,
     ) -> Result<Self::T> {
@@ -151,7 +141,7 @@ impl PredicateVisitor for RewriteNotVisitor {
 
     fn r#in(
         &mut self,
-        _reference: &Reference,
+        _term: &Term,
         _literals: &FnvHashSet<Datum>,
         predicate: &Predicate,
     ) -> Result<Self::T> {
@@ -160,7 +150,7 @@ impl PredicateVisitor for RewriteNotVisitor {
 
     fn not_in(
         &mut self,
-        _reference: &Reference,
+        _term: &Term,
         _literals: &FnvHashSet<Datum>,
         predicate: &Predicate,
     ) -> Result<Self::T> {
@@ -193,41 +183,25 @@ impl BoundPredicateVisitor for RewriteNotVisitor {
         Ok(inner.negate())
     }
 
-    fn is_null(
-        &mut self,
-        _reference: &BoundReference,
-        predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    fn is_null(&mut self, _term: &BoundTerm, predicate: &BoundPredicate) -> Result<Self::T> {
         Ok(predicate.clone())
     }
 
-    fn not_null(
-        &mut self,
-        _reference: &BoundReference,
-        predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    fn not_null(&mut self, _term: &BoundTerm, predicate: &BoundPredicate) -> Result<Self::T> {
         Ok(predicate.clone())
     }
 
-    fn is_nan(
-        &mut self,
-        _reference: &BoundReference,
-        predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    fn is_nan(&mut self, _term: &BoundTerm, predicate: &BoundPredicate) -> Result<Self::T> {
         Ok(predicate.clone())
     }
 
-    fn not_nan(
-        &mut self,
-        _reference: &BoundReference,
-        predicate: &BoundPredicate,
-    ) -> Result<Self::T> {
+    fn not_nan(&mut self, _term: &BoundTerm, predicate: &BoundPredicate) -> Result<Self::T> {
         Ok(predicate.clone())
     }
 
     fn less_than(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
@@ -236,7 +210,7 @@ impl BoundPredicateVisitor for RewriteNotVisitor {
 
     fn less_than_or_eq(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
@@ -245,7 +219,7 @@ impl BoundPredicateVisitor for RewriteNotVisitor {
 
     fn greater_than(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
@@ -254,7 +228,7 @@ impl BoundPredicateVisitor for RewriteNotVisitor {
 
     fn greater_than_or_eq(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
@@ -263,7 +237,7 @@ impl BoundPredicateVisitor for RewriteNotVisitor {
 
     fn eq(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
@@ -272,7 +246,7 @@ impl BoundPredicateVisitor for RewriteNotVisitor {
 
     fn not_eq(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
@@ -281,7 +255,7 @@ impl BoundPredicateVisitor for RewriteNotVisitor {
 
     fn starts_with(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
@@ -290,7 +264,7 @@ impl BoundPredicateVisitor for RewriteNotVisitor {
 
     fn not_starts_with(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literal: &Datum,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
@@ -299,7 +273,7 @@ impl BoundPredicateVisitor for RewriteNotVisitor {
 
     fn r#in(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
@@ -308,7 +282,7 @@ impl BoundPredicateVisitor for RewriteNotVisitor {
 
     fn not_in(
         &mut self,
-        _reference: &BoundReference,
+        _term: &BoundTerm,
         _literals: &FnvHashSet<Datum>,
         predicate: &BoundPredicate,
     ) -> Result<Self::T> {
@@ -322,7 +296,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::expr::Bind;
+    use crate::expr::{Bind, Reference};
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     fn create_test_schema() -> SchemaRef {
