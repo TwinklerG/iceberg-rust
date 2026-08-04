@@ -17,7 +17,7 @@
 
 use fnv::FnvHashSet;
 
-use super::bound_predicate_visitor::{BoundPredicateVisitor, visit};
+use super::bound_predicate_visitor::{BoundPredicateVisitor, visit_evaluator};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{DataFile, Datum, PrimitiveLiteral, Struct};
 use crate::{Error, ErrorKind, Result};
@@ -46,7 +46,7 @@ impl ExpressionEvaluator {
     pub(crate) fn eval(&self, data_file: &DataFile) -> Result<bool> {
         let mut visitor = ExpressionEvaluatorVisitor::new(data_file.partition());
 
-        visit(&mut visitor, &self.partition_filter)
+        visit_evaluator(&mut visitor, &self.partition_filter)
     }
 }
 

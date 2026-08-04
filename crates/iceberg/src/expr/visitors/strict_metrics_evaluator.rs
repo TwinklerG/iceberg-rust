@@ -17,7 +17,7 @@
 
 use fnv::FnvHashSet;
 
-use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
+use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit_evaluator};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{DataFile, Datum};
 use crate::{Error, ErrorKind, Result};
@@ -57,7 +57,7 @@ impl<'a> StrictMetricsEvaluator<'a> {
         }
 
         let mut evaluator = Self::new(data_file);
-        visit(&mut evaluator, filter)
+        visit_evaluator(&mut evaluator, filter)
     }
 
     fn nan_count(&self, field_id: i32) -> Option<&u64> {
@@ -163,6 +163,10 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
             ErrorKind::DataInvalid,
             "NOT should be rewritten",
         ))
+    }
+
+    fn handle_non_reference(&mut self, _predicate: &BoundPredicate) -> Result<bool> {
+        ROWS_MIGHT_NOT_MATCH
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {

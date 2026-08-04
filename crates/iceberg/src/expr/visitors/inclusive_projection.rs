@@ -108,6 +108,14 @@ impl BoundPredicateVisitor for InclusiveProjection {
         ))
     }
 
+    fn predicate(&mut self, predicate: &BoundPredicate) -> crate::Result<Self::T> {
+        let reference = predicate
+            .term()
+            .expect("predicate is only called for leaves")
+            .reference();
+        self.get_parts(reference, predicate)
+    }
+
     fn is_null(
         &mut self,
         reference: &BoundReference,

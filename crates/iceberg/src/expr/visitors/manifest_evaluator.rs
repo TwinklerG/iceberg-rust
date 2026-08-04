@@ -18,7 +18,7 @@
 use fnv::FnvHashSet;
 use serde_bytes::ByteBuf;
 
-use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
+use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit_evaluator};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{Datum, FieldSummary, ManifestFile, PrimitiveLiteral, Type};
 use crate::{Error, ErrorKind, Result};
@@ -84,7 +84,7 @@ impl ManifestEvaluator {
         match &manifest_file.partitions {
             Some(p) if !p.is_empty() => {
                 let mut evaluator = ManifestFilterVisitor::new(p);
-                visit(&mut evaluator, &self.partition_filter)
+                visit_evaluator(&mut evaluator, &self.partition_filter)
             }
             _ => Ok(true),
         }
