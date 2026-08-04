@@ -17,9 +17,9 @@
 
 use fnv::FnvHashSet;
 
-use crate::Result;
 use crate::expr::{BoundPredicate, BoundReference, PredicateOperator};
 use crate::spec::Datum;
+use crate::{Error, ErrorKind, Result};
 
 /// A visitor for [`BoundPredicate`]s. Visits in post-order.
 pub trait BoundPredicateVisitor {
@@ -40,6 +40,57 @@ pub trait BoundPredicateVisitor {
 
     /// Called after a `Not` predicate is visited
     fn not(&mut self, inner: Self::T) -> Result<Self::T>;
+
+    /// Called for a bound predicate leaf.
+    fn predicate(&mut self, predicate: &BoundPredicate) -> Result<Self::T> {
+        let Some(reference) = predicate.term().and_then(|term| term.as_reference()) else {
+            return self.handle_non_reference(predicate);
+        };
+
+        match predicate {
+            BoundPredicate::Unary(expr) => match expr.op() {
+                PredicateOperator::IsNull => self.is_null(reference, predicate),
+                PredicateOperator::NotNull => self.not_null(reference, predicate),
+                PredicateOperator::IsNan => self.is_nan(reference, predicate),
+                PredicateOperator::NotNan => self.not_nan(reference, predicate),
+                op => panic!("Unexpected op for unary predicate: {op}"),
+            },
+            BoundPredicate::Binary(expr) => match expr.op() {
+                PredicateOperator::LessThan => self.less_than(reference, expr.literal(), predicate),
+                PredicateOperator::LessThanOrEq => {
+                    self.less_than_or_eq(reference, expr.literal(), predicate)
+                }
+                PredicateOperator::GreaterThan => {
+                    self.greater_than(reference, expr.literal(), predicate)
+                }
+                PredicateOperator::GreaterThanOrEq => {
+                    self.greater_than_or_eq(reference, expr.literal(), predicate)
+                }
+                PredicateOperator::Eq => self.eq(reference, expr.literal(), predicate),
+                PredicateOperator::NotEq => self.not_eq(reference, expr.literal(), predicate),
+                PredicateOperator::StartsWith => {
+                    self.starts_with(reference, expr.literal(), predicate)
+                }
+                PredicateOperator::NotStartsWith => {
+                    self.not_starts_with(reference, expr.literal(), predicate)
+                }
+                op => panic!("Unexpected op for binary predicate: {op}"),
+            },
+            BoundPredicate::Set(expr) => match expr.op() {
+                PredicateOperator::In => self.r#in(reference, expr.literals(), predicate),
+                PredicateOperator::NotIn => self.not_in(reference, expr.literals(), predicate),
+                op => panic!("Unexpected op for set predicate: {}", op),
+            },
+            _ => unreachable!("predicate hook is only called for leaves"),
+        }
+    }
+
+    fn handle_non_reference(&mut self, predicate: &BoundPredicate) -> Result<Self::T> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            format!("Visitor does not support non-reference predicate: {predicate}"),
+        ))
+    }
 
     /// Called after a predicate with an `IsNull` operator is visited
     fn is_null(
@@ -179,50 +230,43 @@ pub(crate) fn visit<V: BoundPredicateVisitor>(
 
             visitor.not(inner_result)
         }
-        BoundPredicate::Unary(expr) => match expr.op() {
-            PredicateOperator::IsNull => visitor.is_null(expr.term(), predicate),
-            PredicateOperator::NotNull => visitor.not_null(expr.term(), predicate),
-            PredicateOperator::IsNan => visitor.is_nan(expr.term(), predicate),
-            PredicateOperator::NotNan => visitor.not_nan(expr.term(), predicate),
-            op => {
-                panic!("Unexpected op for unary predicate: {}", &op)
-            }
-        },
-        BoundPredicate::Binary(expr) => {
-            let reference = expr.term();
-            let literal = expr.literal();
-            match expr.op() {
-                PredicateOperator::LessThan => visitor.less_than(reference, literal, predicate),
-                PredicateOperator::LessThanOrEq => {
-                    visitor.less_than_or_eq(reference, literal, predicate)
-                }
-                PredicateOperator::GreaterThan => {
-                    visitor.greater_than(reference, literal, predicate)
-                }
-                PredicateOperator::GreaterThanOrEq => {
-                    visitor.greater_than_or_eq(reference, literal, predicate)
-                }
-                PredicateOperator::Eq => visitor.eq(reference, literal, predicate),
-                PredicateOperator::NotEq => visitor.not_eq(reference, literal, predicate),
-                PredicateOperator::StartsWith => visitor.starts_with(reference, literal, predicate),
-                PredicateOperator::NotStartsWith => {
-                    visitor.not_starts_with(reference, literal, predicate)
-                }
-                op => {
-                    panic!("Unexpected op for binary predicate: {}", &op)
-                }
-            }
+        BoundPredicate::Unary(_) | BoundPredicate::Binary(_) | BoundPredicate::Set(_) => {
+            visitor.predicate(predicate)
         }
-        BoundPredicate::Set(expr) => {
-            let reference = expr.term();
-            let literals = expr.literals();
-            match expr.op() {
-                PredicateOperator::In => visitor.r#in(reference, literals, predicate),
-                PredicateOperator::NotIn => visitor.not_in(reference, literals, predicate),
-                op => {
-                    panic!("Unexpected op for set predicate: {}", &op)
-                }
+    }
+}
+
+/// Bool Short-Circuiting Optimization of `visit`
+pub(crate) fn visit_evaluator<V>(visitor: &mut V, predicate: &BoundPredicate) -> Result<bool>
+where V: BoundPredicateVisitor<T = bool> {
+    match predicate {
+        BoundPredicate::AlwaysTrue => visitor.always_true(),
+        BoundPredicate::AlwaysFalse => visitor.always_false(),
+        BoundPredicate::And(expr) => {
+            let [left_pred, right_pred] = expr.inputs();
+            if !visit_evaluator(visitor, left_pred)? {
+                return visitor.always_false();
             }
+
+            let right_result = visit_evaluator(visitor, right_pred)?;
+            visitor.and(true, right_result)
+        }
+        BoundPredicate::Or(expr) => {
+            let [left_pred, right_pred] = expr.inputs();
+            if visit_evaluator(visitor, left_pred)? {
+                return visitor.always_true();
+            }
+
+            let right_result = visit_evaluator(visitor, right_pred)?;
+            visitor.or(false, right_result)
+        }
+        BoundPredicate::Not(expr) => {
+            let [inner_pred] = expr.inputs();
+            let inner_result = visit_evaluator(visitor, inner_pred)?;
+            visitor.not(inner_result)
+        }
+        BoundPredicate::Unary(_) | BoundPredicate::Binary(_) | BoundPredicate::Set(_) => {
+            visitor.predicate(predicate)
         }
     }
 }

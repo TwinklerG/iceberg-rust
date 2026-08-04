@@ -17,14 +17,15 @@
 
 use fnv::FnvHashSet;
 
-use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference};
+use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit_evaluator};
+use crate::expr::{BoundPredicate, BoundReference, BoundTransformTerm, PredicateOperator};
 use crate::spec::{DataFile, Datum, PrimitiveLiteral};
-use crate::{Error, ErrorKind};
+use crate::transform::create_transform_function;
+use crate::{Error, ErrorKind, Result};
 
 const IN_PREDICATE_LIMIT: usize = 200;
-const ROWS_MIGHT_MATCH: crate::Result<bool> = Ok(true);
-const ROWS_CANNOT_MATCH: crate::Result<bool> = Ok(false);
+const ROWS_MIGHT_MATCH: Result<bool> = Ok(true);
+const ROWS_CANNOT_MATCH: Result<bool> = Ok(false);
 
 pub(crate) struct InclusiveMetricsEvaluator<'a> {
     data_file: &'a DataFile,
@@ -43,13 +44,13 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
         filter: &'a BoundPredicate,
         data_file: &'a DataFile,
         include_empty_files: bool,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         if !include_empty_files && data_file.record_count == 0 {
             return ROWS_CANNOT_MATCH;
         }
 
         let mut evaluator = Self::new(data_file);
-        visit(&mut evaluator, filter)
+        visit_evaluator(&mut evaluator, filter)
     }
 
     fn nan_count(&self, field_id: i32) -> Option<&u64> {
@@ -100,7 +101,7 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
         datum: &Datum,
         cmp_fn: fn(&Datum, &Datum) -> bool,
         use_lower_bound: bool,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         let field_id = reference.field().id;
 
         if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
@@ -129,36 +130,270 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
 
         ROWS_MIGHT_MATCH
     }
+
+    /// Transforms the source column bound through an order-preserving transform.
+    fn transform_bound(
+        &self,
+        transform: &BoundTransformTerm,
+        lower: bool,
+    ) -> Result<Option<Datum>> {
+        if !transform.transform().preserves_order() {
+            return Ok(None);
+        }
+
+        let field_id = transform.reference().field().id;
+        let bound = if lower {
+            self.lower_bound(field_id)
+        } else {
+            self.upper_bound(field_id)
+        };
+
+        match bound {
+            Some(bound) => {
+                create_transform_function(transform.transform())?.transform_literal(bound)
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn visit_not_starts_with_bounds(
+        &self,
+        field_id: i32,
+        lower_bound: Option<&Datum>,
+        upper_bound: Option<&Datum>,
+        datum: &Datum,
+    ) -> Result<bool> {
+        if self.may_contain_null(field_id) {
+            return ROWS_MIGHT_MATCH;
+        }
+
+        let PrimitiveLiteral::String(prefix) = datum.literal() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot use NotStartsWith operator on non-string values",
+            ));
+        };
+        let Some(lower_bound) = lower_bound else {
+            return ROWS_MIGHT_MATCH;
+        };
+        let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot use NotStartsWith operator on non-string lower bound",
+            ));
+        };
+
+        let prefix_len = prefix.chars().count();
+        if lower_bound.chars().count() < prefix_len
+            || lower_bound.chars().take(prefix_len).ne(prefix.chars())
+        {
+            return ROWS_MIGHT_MATCH;
+        }
+
+        let Some(upper_bound) = upper_bound else {
+            return ROWS_MIGHT_MATCH;
+        };
+        let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
+            return Err(Error::new(
+                ErrorKind::Unexpected,
+                "Cannot use NotStartsWith operator on non-string upper bound",
+            ));
+        };
+
+        if upper_bound.chars().count() >= prefix_len
+            && upper_bound.chars().take(prefix_len).eq(prefix.chars())
+        {
+            ROWS_CANNOT_MATCH
+        } else {
+            ROWS_MIGHT_MATCH
+        }
+    }
+
+    fn visit_transform_predicate(
+        &mut self,
+        transform: &BoundTransformTerm,
+        predicate: &BoundPredicate,
+    ) -> Result<bool> {
+        let field_id = transform.reference().field().id;
+
+        match predicate {
+            BoundPredicate::Unary(expr) => match expr.op() {
+                PredicateOperator::IsNull => {
+                    if transform.transform().preserves_order() && !self.may_contain_null(field_id) {
+                        ROWS_CANNOT_MATCH
+                    } else {
+                        ROWS_MIGHT_MATCH
+                    }
+                }
+                PredicateOperator::NotNull => {
+                    if self.contains_nulls_only(field_id) {
+                        ROWS_CANNOT_MATCH
+                    } else {
+                        ROWS_MIGHT_MATCH
+                    }
+                }
+                PredicateOperator::IsNan => {
+                    if self.contains_nulls_only(field_id)
+                        || (matches!(transform.transform(), crate::spec::Transform::Identity)
+                            && self.nan_count(field_id) == Some(&0))
+                    {
+                        ROWS_CANNOT_MATCH
+                    } else {
+                        ROWS_MIGHT_MATCH
+                    }
+                }
+                PredicateOperator::NotNan => {
+                    if matches!(transform.transform(), crate::spec::Transform::Identity)
+                        && self.contains_nans_only(field_id)
+                    {
+                        ROWS_CANNOT_MATCH
+                    } else {
+                        ROWS_MIGHT_MATCH
+                    }
+                }
+                op => panic!("Unexpected op for unary predicate: {op}"),
+            },
+            BoundPredicate::Binary(expr) => {
+                if matches!(
+                    expr.op(),
+                    PredicateOperator::LessThan
+                        | PredicateOperator::LessThanOrEq
+                        | PredicateOperator::GreaterThan
+                        | PredicateOperator::GreaterThanOrEq
+                        | PredicateOperator::Eq
+                ) && (self.contains_nulls_only(field_id) || self.contains_nans_only(field_id))
+                {
+                    return ROWS_CANNOT_MATCH;
+                }
+
+                let literal = expr.literal();
+                match expr.op() {
+                    PredicateOperator::LessThan => match self.transform_bound(transform, true)? {
+                        Some(lower) if !lower.is_nan() && lower >= *literal => ROWS_CANNOT_MATCH,
+                        _ => ROWS_MIGHT_MATCH,
+                    },
+                    PredicateOperator::LessThanOrEq => {
+                        match self.transform_bound(transform, true)? {
+                            Some(lower) if !lower.is_nan() && lower > *literal => ROWS_CANNOT_MATCH,
+                            _ => ROWS_MIGHT_MATCH,
+                        }
+                    }
+                    PredicateOperator::GreaterThan => {
+                        match self.transform_bound(transform, false)? {
+                            Some(upper) if upper <= *literal => ROWS_CANNOT_MATCH,
+                            _ => ROWS_MIGHT_MATCH,
+                        }
+                    }
+                    PredicateOperator::GreaterThanOrEq => {
+                        match self.transform_bound(transform, false)? {
+                            Some(upper) if upper < *literal => ROWS_CANNOT_MATCH,
+                            _ => ROWS_MIGHT_MATCH,
+                        }
+                    }
+                    PredicateOperator::Eq => {
+                        if self
+                            .transform_bound(transform, true)?
+                            .is_some_and(|lower| !lower.is_nan() && lower > *literal)
+                            || self
+                                .transform_bound(transform, false)?
+                                .is_some_and(|upper| upper < *literal)
+                        {
+                            ROWS_CANNOT_MATCH
+                        } else {
+                            ROWS_MIGHT_MATCH
+                        }
+                    }
+                    PredicateOperator::NotEq => ROWS_MIGHT_MATCH,
+                    PredicateOperator::StartsWith => {
+                        if matches!(transform.transform(), crate::spec::Transform::Identity) {
+                            self.starts_with(transform.reference(), literal, predicate)
+                        } else {
+                            ROWS_MIGHT_MATCH
+                        }
+                    }
+                    PredicateOperator::NotStartsWith => {
+                        let lower = self.transform_bound(transform, true)?;
+                        let upper = self.transform_bound(transform, false)?;
+                        self.visit_not_starts_with_bounds(
+                            field_id,
+                            lower.as_ref(),
+                            upper.as_ref(),
+                            literal,
+                        )
+                    }
+                    op => panic!("Unexpected op for binary predicate: {op}"),
+                }
+            }
+            BoundPredicate::Set(expr) => match expr.op() {
+                PredicateOperator::In => {
+                    if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
+                        return ROWS_CANNOT_MATCH;
+                    }
+                    if expr.literals().len() > IN_PREDICATE_LIMIT {
+                        return ROWS_MIGHT_MATCH;
+                    }
+
+                    let lower = self.transform_bound(transform, true)?;
+                    let upper = self.transform_bound(transform, false)?;
+                    if lower.is_none() || upper.is_none() {
+                        return ROWS_MIGHT_MATCH;
+                    }
+                    let lower = lower.unwrap();
+                    let upper = upper.unwrap();
+                    if lower.is_nan() {
+                        return ROWS_MIGHT_MATCH;
+                    }
+
+                    if expr
+                        .literals()
+                        .iter()
+                        .any(|literal| &lower <= literal && literal <= &upper)
+                    {
+                        ROWS_MIGHT_MATCH
+                    } else {
+                        ROWS_CANNOT_MATCH
+                    }
+                }
+                PredicateOperator::NotIn => ROWS_MIGHT_MATCH,
+                op => panic!("Unexpected op for set predicate: {op}"),
+            },
+            _ => unreachable!("visit_transform_predicate is only called for leaves"),
+        }
+    }
 }
 
 impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
     type T = bool;
 
-    fn always_true(&mut self) -> crate::Result<bool> {
+    fn always_true(&mut self) -> Result<bool> {
         ROWS_MIGHT_MATCH
     }
 
-    fn always_false(&mut self) -> crate::Result<bool> {
+    fn always_false(&mut self) -> Result<bool> {
         ROWS_CANNOT_MATCH
     }
 
-    fn and(&mut self, lhs: bool, rhs: bool) -> crate::Result<bool> {
+    fn and(&mut self, lhs: bool, rhs: bool) -> Result<bool> {
         Ok(lhs && rhs)
     }
 
-    fn or(&mut self, lhs: bool, rhs: bool) -> crate::Result<bool> {
+    fn or(&mut self, lhs: bool, rhs: bool) -> Result<bool> {
         Ok(lhs || rhs)
     }
 
-    fn not(&mut self, inner: bool) -> crate::Result<bool> {
+    fn not(&mut self, inner: bool) -> Result<bool> {
         Ok(!inner)
     }
 
-    fn is_null(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    fn handle_non_reference(&mut self, predicate: &BoundPredicate) -> Result<bool> {
+        let transform = predicate
+            .term()
+            .and_then(|term| term.as_transform())
+            .expect("only transform terms are supported");
+        self.visit_transform_predicate(transform, predicate)
+    }
+
+    fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
         let field_id = reference.field().id;
 
         match self.null_count(field_id) {
@@ -172,7 +407,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         &mut self,
         reference: &BoundReference,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         let field_id = reference.field().id;
 
         if self.contains_nulls_only(field_id) {
@@ -182,11 +417,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         ROWS_MIGHT_MATCH
     }
 
-    fn is_nan(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
         let field_id = reference.field().id;
 
         match self.nan_count(field_id) {
@@ -196,11 +427,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
     }
 
-    fn not_nan(
-        &mut self,
-        reference: &BoundReference,
-        _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
         let field_id = reference.field().id;
 
         if self.contains_nans_only(field_id) {
@@ -215,7 +442,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         reference: &BoundReference,
         datum: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         self.visit_inequality(reference, datum, PartialOrd::lt, true)
     }
 
@@ -224,7 +451,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         reference: &BoundReference,
         datum: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         self.visit_inequality(reference, datum, PartialOrd::le, true)
     }
 
@@ -233,7 +460,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         reference: &BoundReference,
         datum: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         self.visit_inequality(reference, datum, PartialOrd::gt, false)
     }
 
@@ -242,7 +469,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         reference: &BoundReference,
         datum: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         self.visit_inequality(reference, datum, PartialOrd::ge, false)
     }
 
@@ -251,7 +478,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         reference: &BoundReference,
         datum: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         let field_id = reference.field().id;
 
         if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
@@ -286,7 +513,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         _reference: &BoundReference,
         _datum: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         // Because the bounds are not necessarily a min or max value,
         // this cannot be answered using them. notEq(col, X) with (X, Y)
         // doesn't guarantee that X is a value in col.
@@ -298,7 +525,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         reference: &BoundReference,
         datum: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         let field_id = reference.field().id;
 
         if self.contains_nulls_only(field_id) {
@@ -356,68 +583,14 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         reference: &BoundReference,
         datum: &Datum,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         let field_id = reference.field().id;
-
-        if self.may_contain_null(field_id) {
-            return ROWS_MIGHT_MATCH;
-        }
-
-        // notStartsWith will match unless all values must start with the prefix.
-        // This happens when the lower and upper bounds both start with the prefix.
-
-        let PrimitiveLiteral::String(prefix) = datum.literal() else {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                "Cannot use StartsWith operator on non-string values",
-            ));
-        };
-
-        let Some(lower_bound) = self.lower_bound(field_id) else {
-            return ROWS_MIGHT_MATCH;
-        };
-
-        let PrimitiveLiteral::String(lower_bound_str) = lower_bound.literal() else {
-            return Err(Error::new(
-                ErrorKind::Unexpected,
-                "Cannot use NotStartsWith operator on non-string lower_bound value",
-            ));
-        };
-
-        if lower_bound_str < prefix {
-            // if lower is shorter than the prefix then lower doesn't start with the prefix
-            return ROWS_MIGHT_MATCH;
-        }
-
-        let prefix_len = prefix.chars().count();
-
-        if lower_bound_str.chars().take(prefix_len).collect::<String>() == *prefix {
-            // lower bound matches the prefix
-
-            let Some(upper_bound) = self.upper_bound(field_id) else {
-                return ROWS_MIGHT_MATCH;
-            };
-
-            let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
-                return Err(Error::new(
-                    ErrorKind::Unexpected,
-                    "Cannot use NotStartsWith operator on non-string upper_bound value",
-                ));
-            };
-
-            // if upper is shorter than the prefix then upper can't start with the prefix
-            if upper_bound.chars().count() < prefix_len {
-                return ROWS_MIGHT_MATCH;
-            }
-
-            if upper_bound.chars().take(prefix_len).collect::<String>() == *prefix {
-                // both bounds match the prefix, so all rows must match the
-                // prefix and therefore do not satisfy the predicate
-                return ROWS_CANNOT_MATCH;
-            }
-        }
-
-        ROWS_MIGHT_MATCH
+        self.visit_not_starts_with_bounds(
+            field_id,
+            self.lower_bound(field_id),
+            self.upper_bound(field_id),
+            datum,
+        )
     }
 
     fn r#in(
@@ -425,7 +598,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         reference: &BoundReference,
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         let field_id = reference.field().id;
 
         if self.contains_nulls_only(field_id) || self.contains_nans_only(field_id) {
@@ -469,7 +642,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         _reference: &BoundReference,
         _literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
-    ) -> crate::Result<bool> {
+    ) -> Result<bool> {
         // Because the bounds are not necessarily a min or max value,
         // this cannot be answered using them. notIn(col, {X, ...})
         // with (X, Y) doesn't guarantee that X is a value in col.
@@ -491,7 +664,7 @@ mod test {
     };
     use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
     use crate::expr::{
-        BinaryExpression, Bind, BoundPredicate, Predicate, Reference, SetExpression,
+        BinaryExpression, Bind, BoundPredicate, Predicate, Reference, SetExpression, TransformTerm,
         UnaryExpression,
     };
     use crate::spec::{
@@ -519,6 +692,151 @@ mod test {
             InclusiveMetricsEvaluator::eval(&partition_filter, &data_file, case_sensitive).unwrap();
 
         assert!(result);
+    }
+
+    fn should_read_transform(predicate: Predicate, file: &DataFile) -> bool {
+        let bound = predicate.bind(create_test_schema(), true).unwrap();
+        InclusiveMetricsEvaluator::eval(&bound, file, true).unwrap()
+    }
+
+    #[test]
+    fn test_metrics_for_order_preserving_transform_terms() {
+        let file = get_test_file_1();
+
+        assert!(!should_read_transform(
+            TransformTerm::truncate("id", 10).less_than(Datum::int(30)),
+            &file,
+        ));
+        assert!(should_read_transform(
+            TransformTerm::truncate("id", 10).less_than(Datum::int(31)),
+            &file,
+        ));
+        assert!(!should_read_transform(
+            TransformTerm::truncate("id", 10).greater_than(Datum::int(70)),
+            &file,
+        ));
+        assert!(should_read_transform(
+            TransformTerm::truncate("id", 10).greater_than(Datum::int(69)),
+            &file,
+        ));
+        assert!(!should_read_transform(
+            TransformTerm::truncate("id", 10).equal_to(Datum::int(20)),
+            &file,
+        ));
+        assert!(should_read_transform(
+            TransformTerm::truncate("id", 10).equal_to(Datum::int(30)),
+            &file,
+        ));
+        assert!(!should_read_transform(
+            TransformTerm::truncate("id", 10).is_in([Datum::int(20), Datum::int(21)]),
+            &file,
+        ));
+        assert!(should_read_transform(
+            TransformTerm::truncate("id", 10).is_in([Datum::int(20), Datum::int(30)]),
+            &file,
+        ));
+    }
+
+    #[test]
+    fn test_metrics_for_non_order_preserving_transform_terms() {
+        let file = get_test_file_1();
+        let predicates = [
+            TransformTerm::bucket("id", 16).is_null(),
+            TransformTerm::bucket("id", 16).is_not_null(),
+            TransformTerm::bucket("id", 16).less_than(Datum::int(3)),
+            TransformTerm::bucket("id", 16).less_than_or_equal_to(Datum::int(3)),
+            TransformTerm::bucket("id", 16).greater_than(Datum::int(3)),
+            TransformTerm::bucket("id", 16).greater_than_or_equal_to(Datum::int(3)),
+            TransformTerm::bucket("id", 16).equal_to(Datum::int(3)),
+            TransformTerm::bucket("id", 16).not_equal_to(Datum::int(3)),
+            TransformTerm::bucket("id", 16).is_in([Datum::int(3), Datum::int(4)]),
+            TransformTerm::bucket("id", 16).is_not_in([Datum::int(3), Datum::int(4)]),
+        ];
+
+        for predicate in predicates {
+            assert!(should_read_transform(predicate, &file));
+        }
+    }
+
+    #[test]
+    fn test_metrics_for_string_transform_terms() {
+        let mut file = get_test_file_1();
+        file.lower_bounds.insert(6, Datum::string("abc"));
+        file.upper_bounds.insert(6, Datum::string("abe"));
+
+        assert!(!should_read_transform(
+            TransformTerm::new(Transform::Identity, Reference::new("no_nulls"))
+                .starts_with(Datum::string("b")),
+            &file,
+        ));
+        assert!(should_read_transform(
+            TransformTerm::truncate("no_nulls", 2).starts_with(Datum::string("b")),
+            &file,
+        ));
+        assert!(!should_read_transform(
+            TransformTerm::truncate("no_nulls", 2).not_starts_with(Datum::string("ab")),
+            &file,
+        ));
+        assert!(!should_read_transform(
+            TransformTerm::new(Transform::Identity, Reference::new("no_nulls"))
+                .not_starts_with(Datum::string("ab")),
+            &file,
+        ));
+    }
+
+    #[test]
+    fn test_metrics_for_all_null_transform_terms() {
+        let file = get_test_file_1();
+
+        assert!(should_read_transform(
+            TransformTerm::bucket("all_nulls", 16).is_null(),
+            &file,
+        ));
+        assert!(!should_read_transform(
+            TransformTerm::bucket("all_nulls", 16).is_not_null(),
+            &file,
+        ));
+
+        let cannot_match = [
+            TransformTerm::bucket("all_nulls", 16).less_than(Datum::int(3)),
+            TransformTerm::bucket("all_nulls", 16).less_than_or_equal_to(Datum::int(3)),
+            TransformTerm::bucket("all_nulls", 16).greater_than(Datum::int(3)),
+            TransformTerm::bucket("all_nulls", 16).greater_than_or_equal_to(Datum::int(3)),
+            TransformTerm::bucket("all_nulls", 16).equal_to(Datum::int(3)),
+            TransformTerm::bucket("all_nulls", 16).is_in([Datum::int(3), Datum::int(4)]),
+        ];
+        for predicate in cannot_match {
+            assert!(!should_read_transform(predicate, &file));
+        }
+
+        let might_match = [
+            TransformTerm::bucket("all_nulls", 16).not_equal_to(Datum::int(3)),
+            TransformTerm::bucket("all_nulls", 16).is_not_in([Datum::int(3), Datum::int(4)]),
+            TransformTerm::truncate("all_nulls", 2).starts_with(Datum::string("a")),
+            TransformTerm::truncate("all_nulls", 2).not_starts_with(Datum::string("a")),
+        ];
+        for predicate in might_match {
+            assert!(should_read_transform(predicate, &file));
+        }
+    }
+
+    #[test]
+    fn test_metrics_for_transform_terms_with_missing_stats() {
+        let file = get_test_file_1();
+        let predicates = [
+            TransformTerm::truncate("no_stats", 10).is_null(),
+            TransformTerm::truncate("no_stats", 10).is_not_null(),
+            TransformTerm::truncate("no_stats", 10).less_than(Datum::int(30)),
+            TransformTerm::truncate("no_stats", 10).less_than_or_equal_to(Datum::int(30)),
+            TransformTerm::truncate("no_stats", 10).greater_than(Datum::int(30)),
+            TransformTerm::truncate("no_stats", 10).greater_than_or_equal_to(Datum::int(30)),
+            TransformTerm::truncate("no_stats", 10).equal_to(Datum::int(30)),
+            TransformTerm::truncate("no_stats", 10).not_equal_to(Datum::int(30)),
+        ];
+
+        for predicate in predicates {
+            assert!(should_read_transform(predicate, &file));
+        }
     }
 
     #[test]

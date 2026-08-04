@@ -61,6 +61,10 @@ impl PredicateVisitor for RewriteNotVisitor {
         Ok(inner.negate())
     }
 
+    fn predicate(&mut self, predicate: &Predicate) -> Result<Self::T> {
+        Ok(predicate.clone())
+    }
+
     fn is_null(&mut self, _reference: &Reference, predicate: &Predicate) -> Result<Self::T> {
         Ok(predicate.clone())
     }
@@ -193,6 +197,10 @@ impl BoundPredicateVisitor for RewriteNotVisitor {
         Ok(inner.negate())
     }
 
+    fn predicate(&mut self, predicate: &BoundPredicate) -> Result<Self::T> {
+        Ok(predicate.clone())
+    }
+
     fn is_null(
         &mut self,
         _reference: &BoundReference,
@@ -322,7 +330,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::expr::Bind;
+    use crate::expr::{Bind, TransformTerm};
     use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     fn create_test_schema() -> SchemaRef {
@@ -400,5 +408,20 @@ mod tests {
         let expected_bound = expected_predicate.bind(schema, true).unwrap();
 
         assert_eq!(result, expected_bound);
+    }
+
+    #[test]
+    fn test_transform_predicate_rewrite_not() {
+        let schema = create_test_schema();
+        let predicate = TransformTerm::bucket("bar", 16)
+            .equal_to(Datum::int(3))
+            .not();
+        let expected = TransformTerm::bucket("bar", 16).not_equal_to(Datum::int(3));
+
+        assert_eq!(predicate.clone().rewrite_not(), expected);
+        assert_eq!(
+            predicate.bind(schema.clone(), true).unwrap().rewrite_not(),
+            expected.bind(schema, true).unwrap()
+        );
     }
 }

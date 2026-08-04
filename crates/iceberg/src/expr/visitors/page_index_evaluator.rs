@@ -443,6 +443,10 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
         ))
     }
 
+    fn handle_non_reference(&mut self, _predicate: &BoundPredicate) -> Result<RowSelection> {
+        self.select_all_rows()
+    }
+
     fn is_null(
         &mut self,
         reference: &BoundReference,

@@ -29,7 +29,7 @@ use super::{Datum, PrimitiveLiteral};
 use crate::ErrorKind;
 use crate::error::{Error, Result};
 use crate::expr::{
-    BinaryExpression, BoundPredicate, BoundReference, Predicate, PredicateOperator, Reference,
+    BinaryExpression, BoundPredicate, BoundTerm, Predicate, PredicateOperator, Reference,
     SetExpression, UnaryExpression,
 };
 use crate::spec::Literal;
@@ -335,6 +335,13 @@ impl Transform {
         name: &str,
         predicate: &BoundPredicate,
     ) -> Result<Option<Predicate>> {
+        if predicate
+            .term()
+            .is_some_and(|term| term.as_transform().is_some())
+        {
+            return Ok(self.project_transform_predicate(name, predicate));
+        }
+
         let func = create_transform_function(self)?;
 
         match self {
@@ -366,7 +373,11 @@ impl Transform {
                 BoundPredicate::Unary(expr) => Self::project_unary(expr.op(), name),
                 BoundPredicate::Binary(expr) => {
                     if matches!(
-                        expr.term().field().field_type.as_primitive_type(),
+                        expr.term()
+                            .reference()
+                            .field()
+                            .field_type
+                            .as_primitive_type(),
                         Some(&PrimitiveType::Int)
                             | Some(&PrimitiveType::Long)
                             | Some(&PrimitiveType::Decimal { .. })
@@ -468,6 +479,13 @@ impl Transform {
     /// value should match `bucket(10, 37) as bs`, and we project `a = 10` to
     /// `bs = bucket(10, 37)`
     pub fn project(&self, name: &str, predicate: &BoundPredicate) -> Result<Option<Predicate>> {
+        if predicate
+            .term()
+            .is_some_and(|term| term.as_transform().is_some())
+        {
+            return Ok(self.project_transform_predicate(name, predicate));
+        }
+
         let func = create_transform_function(self)?;
 
         match self {
@@ -535,6 +553,36 @@ impl Transform {
         ))))
     }
 
+    /// Remove a matching transform so the predicate can target its partition field directly.
+    fn project_transform_predicate(
+        &self,
+        name: &str,
+        predicate: &BoundPredicate,
+    ) -> Option<Predicate> {
+        let transform = predicate.term()?.as_transform()?;
+        if transform.transform() != self {
+            return None;
+        }
+
+        let term = Reference::new(name);
+        match predicate {
+            BoundPredicate::Unary(expr) => {
+                Some(Predicate::Unary(UnaryExpression::new(expr.op(), term)))
+            }
+            BoundPredicate::Binary(expr) => Some(Predicate::Binary(BinaryExpression::new(
+                expr.op(),
+                term,
+                expr.literal().clone(),
+            ))),
+            BoundPredicate::Set(expr) => Some(Predicate::Set(SetExpression::new(
+                expr.op(),
+                term,
+                expr.literals().clone(),
+            ))),
+            _ => None,
+        }
+    }
+
     /// Attempts to create a binary predicate based on a binary expression,
     /// if applicable.
     ///
@@ -545,7 +593,7 @@ impl Transform {
         &self,
         name: &str,
         op: PredicateOperator,
-        expr: &BinaryExpression<BoundReference>,
+        expr: &BinaryExpression<BoundTerm>,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
         if expr.op() != op || !self.can_transform(expr.literal()) {
@@ -570,7 +618,7 @@ impl Transform {
     fn project_binary_with_adjusted_boundary(
         &self,
         name: &str,
-        expr: &BinaryExpression<BoundReference>,
+        expr: &BinaryExpression<BoundTerm>,
         func: &BoxedTransformFunction,
         width: Option<u32>,
     ) -> Result<Option<Predicate>> {
@@ -616,7 +664,7 @@ impl Transform {
     /// applying a transformation to each literal in the set.
     fn project_set_expr(
         &self,
-        expr: &SetExpression<BoundReference>,
+        expr: &SetExpression<BoundTerm>,
         op: PredicateOperator,
         name: &str,
         func: &BoxedTransformFunction,
@@ -897,7 +945,7 @@ impl Transform {
     fn truncate_number_strict(
         &self,
         name: &str,
-        expr: &BinaryExpression<BoundReference>,
+        expr: &BinaryExpression<BoundTerm>,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
         let boundary = expr.literal();
@@ -954,7 +1002,7 @@ impl Transform {
     fn truncate_array_strict(
         &self,
         name: &str,
-        expr: &BinaryExpression<BoundReference>,
+        expr: &BinaryExpression<BoundTerm>,
         func: &BoxedTransformFunction,
     ) -> Result<Option<Predicate>> {
         let boundary = expr.literal();

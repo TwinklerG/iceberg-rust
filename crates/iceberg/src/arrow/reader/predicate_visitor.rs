@@ -75,6 +75,13 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
         Ok(())
     }
 
+    fn handle_non_reference(&mut self, predicate: &BoundPredicate) -> Result<()> {
+        if let Some(term) = predicate.term() {
+            self.field_ids.insert(term.reference().field().id);
+        }
+        Ok(())
+    }
+
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<()> {
         self.field_ids.insert(reference.field().id);
         Ok(())
@@ -346,6 +353,13 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             let pred_ret = inner(batch)?;
             not(&pred_ret)
         }))
+    }
+
+    fn handle_non_reference(
+        &mut self,
+        _predicate: &BoundPredicate,
+    ) -> Result<Box<PredicateResult>> {
+        self.build_always_true()
     }
 
     fn is_null(

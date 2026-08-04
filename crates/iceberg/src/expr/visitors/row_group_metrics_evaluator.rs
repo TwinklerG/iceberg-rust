@@ -24,7 +24,7 @@ use parquet::file::metadata::RowGroupMetaData;
 use parquet::file::statistics::Statistics;
 
 use crate::arrow::{get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum};
-use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
+use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit_evaluator};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
@@ -68,7 +68,7 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
 
         let mut evaluator = Self::new(row_group_metadata, field_id_map, snapshot_schema);
 
-        visit(&mut evaluator, filter)
+        visit_evaluator(&mut evaluator, filter)
     }
 
     fn stats_for_field_id(&self, field_id: i32) -> Option<&Statistics> {
@@ -209,6 +209,10 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
 
     fn not(&mut self, inner: bool) -> Result<bool> {
         Ok(!inner)
+    }
+
+    fn handle_non_reference(&mut self, _predicate: &BoundPredicate) -> Result<bool> {
+        ROW_GROUP_MIGHT_MATCH
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
